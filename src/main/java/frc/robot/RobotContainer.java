@@ -47,7 +47,6 @@ public class RobotContainer {
 
     joystick.a().onTrue(moveToPoint);
     joystick.b().onTrue(autoCenter);
-    joystick.y().onTrue(drivetrain.runOnce(drivetrain::zeroGyroAdjusted));
 
     // reset the field-centric heading on left bumper press
     joystick.leftBumper().onTrue(drivetrain.runOnce(() -> drivetrain.seedFieldRelative()));
