@@ -1,5 +1,7 @@
 package frc.robot;
 
+import org.littletonrobotics.junction.Logger;
+
 import com.ctre.phoenix6.Utils;
 import com.ctre.phoenix6.mechanisms.swerve.SwerveDrivetrain.SwerveDriveState;
 
@@ -83,6 +85,8 @@ public class Telemetry {
             pose.getY(),
             pose.getRotation().getDegrees()
         });
+        
+        Logger.recordOutput("Drive/Pose", pose);
 
         /* Telemeterize the robot's general speeds */
         double currentTime = Utils.getCurrentTimeSeconds();
@@ -106,5 +110,7 @@ public class Telemetry {
 
             SmartDashboard.putData("Module " + i, m_moduleMechanisms[i]);
         }
+
+
     }
 }
