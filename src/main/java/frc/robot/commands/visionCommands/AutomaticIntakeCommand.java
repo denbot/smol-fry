@@ -15,98 +15,117 @@ import frc.robot.util.limelight.LimelightHelpers;
 import frc.robot.util.limelight.LimelightHelpers.RawDetection;
 import frc.robot.util.limelight.Limelights;
 
-// object detection
-
-// repositioning for intake
-
-// movement for intake
-
 public class AutomaticIntakeCommand extends Command {
-  // creates a new AutomaticIntakeCommand
-  DoublePublisher publisher;
+  DoublePublisher distancePublisher;
   DoublePublisher anglePublisher;
   DoublePublisher velocityPublisher;
-  double kP = 5;
-  double rotationalKP = -0.05;
+
   int framesDropped = 0;
   double yDirection = 0;
   double xDirection = 0;
-
+  double distanceSetpoint = 24;
+  double aspectRatio = 0;
+  double boundingBoxX = 0;
+  double boundingBoxY = 0;
   double distance = 0;
-  //private final SwerveRequest.RobotCentric 
-  private final SwerveRequest.FieldCentric driveRequest = new SwerveRequest.FieldCentric()
+
+  final double maxYSpeed = 0.5;
+  final double maxXSpeed = 0.25;
+  final double kP = -0.25;
+  final double rotationalKP = -0.1;
+
+  private final SwerveRequest.RobotCentric robotCentricRequest = new SwerveRequest.RobotCentric()
       .withDeadband(1 * 0.1).withRotationalDeadband(1 * 0.1) // Add a 10% deadband
       .withDriveRequestType(DriveRequestType.OpenLoopVoltage); // Use open-loop control for drive motors
-  private final SwerveRequest.SwerveDriveBrake brake = new SwerveRequest.SwerveDriveBrake();
 
+  private final SwerveRequest.SwerveDriveBrake brake = new SwerveRequest.SwerveDriveBrake();
 
   CommandSwerveDrivetrain drive;
 
   public AutomaticIntakeCommand(CommandSwerveDrivetrain drive) {
     this.drive = drive;
     addRequirements(drive);
-    publisher = NetworkTableInstance.getDefault().getDoubleTopic("Distance").publish();
-    publisher.set(-3);
+    distancePublisher = NetworkTableInstance.getDefault().getDoubleTopic("Distance").publish();
+    distancePublisher.set(0);
     anglePublisher = NetworkTableInstance.getDefault().getDoubleTopic("Angle").publish();
-    anglePublisher.set(-3);
+    anglePublisher.set(0);
     velocityPublisher = NetworkTableInstance.getDefault().getDoubleTopic("velocity").publish();
-    velocityPublisher.set(-3);
+    velocityPublisher.set(0);
   }
 
   public void initialize() {
-    publisher.set(-2);
-    anglePublisher.set(-2);
+    framesDropped = 0;
   }
 
   public void execute() {
-    // if we drop a frame, do nothing for this periodic, unless we've dropped 6 or more frames, in
-    // which case we end the command
-    if (LimelightHelpers.getTV(Limelights.REAR.name)) {
-      framesDropped = 0;
-    } else {
-      framesDropped++;
-      return;
-    }
 
     // gets raw data from the limelight
     RawDetection[] rawDetection = LimelightHelpers.getRawDetections("limelight-rear");
-
-    if (rawDetection.length != 0) {
-      yDirection = 90 + rawDetection[0].tync;
-      xDirection = rawDetection[0].txnc; // this will be used for repositioning
-      distance = Math.tan(Math.toRadians(yDirection)) * 5.5625;
-      publisher.set(distance);
-      anglePublisher.set(xDirection);
-    } else {
-      publisher.set(-1);
-      anglePublisher.set(0);
+    int targetCorral = -1;
+    double distanceSmallest = Double.MAX_VALUE;
+    for (int i = 0; i < rawDetection.length; i++){
+        if (rawDetection[i].classId == 1) {
+          double boundingBox2X = (rawDetection[i].corner0_X + rawDetection[i].corner2_X) / 2;
+          double boundingBox2Y = (rawDetection[i].corner0_Y + rawDetection[i].corner2_Y) / 2;
+          double distanceCurrent = Math.sqrt(Math.pow(boundingBox2X - boundingBoxX,2) + 
+                                            Math.pow(boundingBox2Y - boundingBoxY,2));
+          if(distanceCurrent < distanceSmallest){
+            distanceSmallest = distanceCurrent;
+            targetCorral = i;
+        }
+      }
     }
     
-    drive.setControl(driveRequest.withVelocityX(0).withVelocityY(0).withRotationalRate(xDirection*rotationalKP));
-    velocityPublisher.set(xDirection*rotationalKP);
-    //ChassisSpeeds chassisSpeeds = new ChassisSpeeds(0,0,xDirection*rotationalKP);
-//    drive.runVelocity(chassisSpeeds);
+    if (targetCorral != -1) {
+      framesDropped = 0;
 
-    /*
-    double maxVelocity = 0.5; // TODO: When in large space set to 6
-    double xDriveSpeed = Math.max(-maxVelocity, Math.min(maxVelocity, kP * Math.sin(distance)));
-    SmartDashboard.putNumber("xDriveSpeed", xDriveSpeed);
-    double yDriveSpeed = Math.max(-maxVelocity, Math.min(maxVelocity, kP * Math.cos(distance)));
-    SmartDashboard.putNumber("yDriveSpeed", yDriveSpeed);
+      yDirection = 90 + rawDetection[targetCorral].tync;
+      xDirection = rawDetection[targetCorral].txnc; // this will be used for repositioning
+      distance = Math.tan(Math.toRadians(yDirection)) * 5.5625;
+      
+      distancePublisher.set(distance);
+      anglePublisher.set(xDirection);
+      
+      aspectRatio = Math.abs((rawDetection[targetCorral].corner0_X - rawDetection[targetCorral].corner2_X) /
+                             (rawDetection[targetCorral].corner0_Y - rawDetection[targetCorral].corner2_Y));
+      
+      boundingBoxX = (rawDetection[targetCorral].corner0_X + rawDetection[targetCorral].corner2_X) / 2;
+      boundingBoxY = (rawDetection[targetCorral].corner0_Y + rawDetection[targetCorral].corner2_Y) / 2;
+      
+      double yInput = (distanceSetpoint - distance) * kP;
+      if (Math.abs(distanceSetpoint - distance) < 2) {
+        yInput = 0;
+      }
 
-    ChassisSpeeds chassisSpeeds = new ChassisSpeeds(xDriveSpeed, yDriveSpeed, angle * rotationalKP);
+      if (yInput > maxYSpeed) {
+        yInput = maxYSpeed;
+      }
+      else if (yInput < -maxYSpeed) {
+        yInput = -maxYSpeed;
+      }
 
-    drive.runVelocity(chassisSpeeds);*/
+      double xInput = maxXSpeed;
+      if (aspectRatio < 1.1) {
+        xInput = 0;
+      }
+      drive.setControl(robotCentricRequest.withVelocityX(xInput)
+                                          .withVelocityY(yInput)
+                                          .withRotationalRate(xDirection*rotationalKP));
 
+      velocityPublisher.set(yInput);
+    }
+    else {
+      anglePublisher.set(framesDropped);
+      framesDropped++;
+    }
   }
+  
 
   public void end(boolean interrupted) {
-    // drive.stopWithX();
-    SmartDashboard.putString("done", "done");
+    drive.setControl(brake);
   }
 
   public boolean isFinished() {
-    return false;
-    // return (Math.abs(angle) < 3 && distance < 0.1) || (framesDropped > 5);
+    return (framesDropped > 5);
   }
 }
