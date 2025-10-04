@@ -7,6 +7,7 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveDriveKinematics;
 import edu.wpi.first.networktables.DoublePublisher;
 import edu.wpi.first.networktables.NetworkTableInstance;
+import edu.wpi.first.networktables.StringPublisher;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SwerveControllerCommand;
@@ -19,20 +20,30 @@ public class AutomaticIntakeCommand extends Command {
   DoublePublisher distancePublisher;
   DoublePublisher anglePublisher;
   DoublePublisher velocityPublisher;
+  StringPublisher statePublisher;
 
   int framesDropped = 0;
   double yDirection = 0;
   double xDirection = 0;
-  double distanceSetpoint = 24;
-  double aspectRatio = 0;
+  double distanceSetpoint = 16;
+  double aspectRatio = Double.MAX_VALUE;
   double boundingBoxX = 0;
   double boundingBoxY = 0;
   double distance = 0;
 
-  final double maxYSpeed = 0.5;
+  final double maxYSpeed = 0.25;
   final double maxXSpeed = 0.25;
+  final double maxRspeed = 1;
   final double kP = -0.25;
   final double rotationalKP = -0.1;
+
+  enum AutoIntakeState{
+    NOT_FOUND,
+    FOUND,
+    ALIGNED
+  };
+  
+  AutoIntakeState stateOfAutointake = AutoIntakeState.NOT_FOUND;
 
   private final SwerveRequest.RobotCentric robotCentricRequest = new SwerveRequest.RobotCentric()
       .withDeadband(1 * 0.1).withRotationalDeadband(1 * 0.1) // Add a 10% deadband
@@ -51,14 +62,18 @@ public class AutomaticIntakeCommand extends Command {
     anglePublisher.set(0);
     velocityPublisher = NetworkTableInstance.getDefault().getDoubleTopic("velocity").publish();
     velocityPublisher.set(0);
+
+    statePublisher = NetworkTableInstance.getDefault().getStringTopic("AutoIntakeState").publish();
+    statePublisher.set("COMMAND CREATED");
   }
 
   public void initialize() {
     framesDropped = 0;
+    stateOfAutointake = AutoIntakeState.NOT_FOUND;
+    statePublisher.set(stateOfAutointake.toString());
   }
 
   public void execute() {
-
     // gets raw data from the limelight
     RawDetection[] rawDetection = LimelightHelpers.getRawDetections("limelight-rear");
     int targetCorral = -1;
@@ -69,16 +84,28 @@ public class AutomaticIntakeCommand extends Command {
           double boundingBox2Y = (rawDetection[i].corner0_Y + rawDetection[i].corner2_Y) / 2;
           double distanceCurrent = Math.sqrt(Math.pow(boundingBox2X - boundingBoxX,2) + 
                                             Math.pow(boundingBox2Y - boundingBoxY,2));
-          if(distanceCurrent < distanceSmallest){
+          if(distanceCurrent < distanceSmallest) {
             distanceSmallest = distanceCurrent;
             targetCorral = i;
         }
       }
     }
-    
-    if (targetCorral != -1) {
-      framesDropped = 0;
 
+    if (targetCorral != -1 && stateOfAutointake == AutoIntakeState.NOT_FOUND){
+      stateOfAutointake = AutoIntakeState.FOUND;
+    }
+    else if (framesDropped > 5 && stateOfAutointake == AutoIntakeState.FOUND){
+      stateOfAutointake = AutoIntakeState.NOT_FOUND;
+    }
+    else if (aspectRatio < 1.1 && stateOfAutointake == AutoIntakeState.FOUND){
+      stateOfAutointake = AutoIntakeState.ALIGNED;
+    }
+    statePublisher.set(stateOfAutointake.toString());
+
+
+    if (targetCorral != -1 && stateOfAutointake == AutoIntakeState.FOUND) {
+      framesDropped = 0;
+      
       yDirection = 90 + rawDetection[targetCorral].tync;
       xDirection = rawDetection[targetCorral].txnc; // this will be used for repositioning
       distance = Math.tan(Math.toRadians(yDirection)) * 5.5625;
@@ -108,24 +135,31 @@ public class AutomaticIntakeCommand extends Command {
       if (aspectRatio < 1.1) {
         xInput = 0;
       }
-      drive.setControl(robotCentricRequest.withVelocityX(xInput)
+     drive.setControl(robotCentricRequest.withVelocityX(xInput)
                                           .withVelocityY(yInput)
                                           .withRotationalRate(xDirection*rotationalKP));
 
       velocityPublisher.set(yInput);
     }
-    else {
+    else if (stateOfAutointake == AutoIntakeState.NOT_FOUND){
+      drive.setControl(robotCentricRequest.withVelocityX(0)
+                                            .withVelocityY(0)
+                                            .withRotationalRate(maxRspeed));
+          
+    }
+
+    if (targetCorral != -1){
       anglePublisher.set(framesDropped);
       framesDropped++;
     }
   }
   
-
   public void end(boolean interrupted) {
     drive.setControl(brake);
+    statePublisher.set("END"); 
   }
 
   public boolean isFinished() {
-    return (framesDropped > 5);
+    return (stateOfAutointake == AutoIntakeState.ALIGNED);
   }
 }
