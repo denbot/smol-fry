@@ -79,7 +79,7 @@ public class Robot extends LoggedRobot {
                     intrinsics,
                     "limelight"));
 
-      visionSim.addAprilTag(new AprilTag(0, new Pose3d(2, 0, 1, new Rotation3d(0, 0, 0))));
+      visionSim.addAprilTag(new AprilTag(0, new Pose3d(2, 0, 0.5, new Rotation3d(0, 0, 0))));
     }
 
   }
