@@ -67,29 +67,23 @@ public class FollowAprilTagCommand extends Command {
     // Called every time the scheduler runs while the command is scheduled.
     @Override
     public void execute() {
-
-        LimelightResults results = LimelightHelpers.getLatestResults(limelightName);
-
-        LimelightTarget_Fiducial targetFiducial = null;
-        for(LimelightTarget_Fiducial fiducial : results.targets_Fiducials) {
-            if(fiducial.fiducialID == 1) { // Replace 1 with the desired fiducial ID
-                targetFiducial = fiducial;
-                break;
-            }
-        }
-
+        System.out.println("Executing FollowAprilTagCommand");
         //Get the robot's current pose in the "field's" coordinate space. Note that we don't actually have
         //a true field-relative pose since we don't have a global reference. The 0,0 of the field space is just
         //wherever the robot starts. But we are only using the odometry for short-term pose estimation when
         //we lose sight of the tag, so it doen't really matter.
         Pose2d robotPoseFieldSpace = drive.getPose();
+        boolean hasTarget = LimelightHelpers.getTV(limelightName);
         Logger.recordOutput("FollowAprilTag/RobotPose_FieldSpace", robotPoseFieldSpace);
+        Logger.recordOutput("FollowAprilTag/HasTarget", hasTarget);
 
-        if (targetFiducial != null) {
+        if(hasTarget)
+        {        
             //Get the tag pose in the robot's coordinate space and then offset
             //it to get the desired target location in the robot's coordinate space.
             //Adding a Transform2d to a Pose2d applies it in the Pose2d's coordinate space.
-            Pose2d tagPoseRobotSpace = targetFiducial.getTargetPose_RobotSpace2D();
+            Pose2d tagPoseRobotSpace = LimelightHelpers.toPose2D(LimelightHelpers.getTargetPose_RobotSpace(limelightName));
+
             Pose2d targetPoseRobotSpace = tagPoseRobotSpace.plus(targetOffset);
 
             //Get the target pose in the field's coordinate space by adding the target pose in robot space to the robot pose in field space.
