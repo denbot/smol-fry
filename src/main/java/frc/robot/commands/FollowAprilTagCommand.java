@@ -8,36 +8,25 @@ import static edu.wpi.first.units.Units.RotationsPerSecond;
 
 import org.littletonrobotics.junction.Logger;
 
-import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
-import com.ctre.phoenix6.swerve.SwerveRequest;
-import com.ctre.phoenix6.swerve.SwerveDrivetrain.SwerveDriveState;
-
 import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Transform2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.units.measure.LinearVelocity;
-import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.util.LimelightHelpers;
-import frc.robot.util.LimelightHelpers.LimelightResults;
-import frc.robot.util.LimelightHelpers.LimelightTarget_Fiducial;
-import frc.robot.util.LimelightHelpers.RawFiducial;
-import frc.robot.generated.TunerConstants;
-import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.drive.Drive;
 
 public class FollowAprilTagCommand extends Command {
-    private final boolean enableDrivetrain = false;
+    private final boolean enableDrivetrain = true;
     private final double maxSpeed = Meters.of(0.5).in(Meters);
     private final double maxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond);
     private final double searchAngularRate = RotationsPerSecond.of(0.25).in(RadiansPerSecond);
 
     private final String limelightName = "limelight";
     
-    private final Transform2d targetOffset = new Transform2d(new Translation2d(1.0, 0.0), new Rotation2d(0)); // Desired offset from the tag (0.5 meters in front)
+    private final Transform2d targetOffset = new Transform2d(new Translation2d(0.0, 2.0), new Rotation2d(0)); // Desired offset from the tag (0.5 meters in front)
 
     private final double rotationPd = 2.0; // Proportional gain for rotation control
     private final double translationPd = 1.0; // Proportional gain for translation control
@@ -46,6 +35,8 @@ public class FollowAprilTagCommand extends Command {
 
     private int countSinceLastSeen = 0;
     private Pose2d targetPoseFieldSpace = new Pose2d();
+    private Pose2d targetPoseRobotSpace = new Pose2d();
+    private Pose2d tagPoseRobotSpace = new Pose2d();
 
     public FollowAprilTagCommand(Drive drive) {
         addRequirements(drive);
@@ -74,7 +65,7 @@ public class FollowAprilTagCommand extends Command {
         //we lose sight of the tag, so it doen't really matter.
         Pose2d robotPoseFieldSpace = drive.getPose();
         boolean hasTarget = LimelightHelpers.getTV(limelightName);
-        Logger.recordOutput("FollowAprilTag/RobotPose_FieldSpace", robotPoseFieldSpace);
+        Logger.recordOutput("FollowAprilTag/RobotPose_FieldSpace", new Pose3d(robotPoseFieldSpace));
         Logger.recordOutput("FollowAprilTag/HasTarget", hasTarget);
 
         if(hasTarget)
@@ -82,16 +73,17 @@ public class FollowAprilTagCommand extends Command {
             //Get the tag pose in the robot's coordinate space and then offset
             //it to get the desired target location in the robot's coordinate space.
             //Adding a Transform2d to a Pose2d applies it in the Pose2d's coordinate space.
-            Pose2d tagPoseRobotSpace = LimelightHelpers.toPose2D(LimelightHelpers.getTargetPose_RobotSpace(limelightName));
+            tagPoseRobotSpace = LimelightHelpers.toPose2D(LimelightHelpers.getTargetPose_RobotSpace(limelightName));
+            targetPoseRobotSpace = tagPoseRobotSpace.plus(targetOffset);
 
-            Pose2d targetPoseRobotSpace = tagPoseRobotSpace.plus(targetOffset);
+            Pose2d tagPoseFieldSpace = robotPoseFieldSpace.plus(pose2dToTransform2d(tagPoseRobotSpace));
 
             //Get the target pose in the field's coordinate space by adding the target pose in robot space to the robot pose in field space.
             targetPoseFieldSpace = robotPoseFieldSpace.plus(pose2dToTransform2d(targetPoseRobotSpace));
 
             countSinceLastSeen = 0;
-
             Logger.recordOutput("FollowAprilTag/TagPose_RobotSpace", tagPoseRobotSpace);
+            Logger.recordOutput("FollowAprilTag/TagPose_FieldSpace", tagPoseFieldSpace);
             Logger.recordOutput("FollowAprilTag/TargetPose_RobotSpace", targetPoseRobotSpace);
             Logger.recordOutput("FollowAprilTag/TargetPose_FieldSpace", targetPoseFieldSpace);
 
@@ -101,9 +93,16 @@ public class FollowAprilTagCommand extends Command {
 
         if (countSinceLastSeen < 3) { // If we recently saw the tag, keep trying to go to the last known position
             //Get the XY and rotation error between where the robot is and where we want it to be.
+
+            //Field relative
             double adjustedTargetX = targetPoseFieldSpace.getX() - robotPoseFieldSpace.getX();
             double adjustedTargetY = targetPoseFieldSpace.getY() - robotPoseFieldSpace.getY();
-            double targetRotation = Math.atan2(adjustedTargetY, adjustedTargetX);
+            double targetRotation = Math.atan2(tagPoseRobotSpace.getY(), tagPoseRobotSpace.getX());
+
+            //Robot relative
+            //double adjustedTargetX = targetPoseRobotSpace.getX();
+            //double adjustedTargetY = targetPoseRobotSpace.getY();
+            //double targetRotation = Math.atan2(tagPoseRobotSpace.getY(), tagPoseRobotSpace.getX());
 
             //Calculate the velocity requests based on that error.
             double xVelocityRequest = clamp(adjustedTargetX * translationPd, -maxSpeed, maxSpeed);
@@ -118,10 +117,7 @@ public class FollowAprilTagCommand extends Command {
                         xVelocityRequest,
                         yVelocityRequest,
                         rotationRequest);
-                drive.runVelocity(
-                    ChassisSpeeds.fromFieldRelativeSpeeds(
-                        speeds,
-                        drive.getRotation()));
+                drive.runVelocity(ChassisSpeeds.fromFieldRelativeSpeeds(speeds, drive.getRotation()));
             } else {
                 drive.stopWithX();
             }
@@ -148,10 +144,7 @@ public class FollowAprilTagCommand extends Command {
                         xVelocityRequest,
                         yVelocityRequest,
                         rotationRequest);
-                drive.runVelocity(
-                    ChassisSpeeds.fromFieldRelativeSpeeds(
-                        speeds,
-                        drive.getRotation()));
+                drive.runVelocity(speeds);
 
             } else {
                 drive.stopWithX();

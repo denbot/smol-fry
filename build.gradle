@@ -74,12 +74,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
-<<<<<<< HEAD
     def akitJson = new groovy.json.JsonSlurper().parseText(new File(projectDir.getAbsolutePath() + "/vendordeps/AdvantageKit.json").text)
     annotationProcessor "org.littletonrobotics.akit:akit-autolog:$akitJson.version"
 
-=======
->>>>>>> 9796988 (Updated FollowAprilTagCommand to not use json)
     implementation files('libs/frc-vision-simulation.jar')
 }
 
