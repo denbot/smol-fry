@@ -29,24 +29,25 @@ import edu.wpi.first.math.numbers.N6;
 import edu.wpi.first.math.system.LinearSystem;
 import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.util.LimelightHelpers;
+import frc.robot.Constants;
 import frc.robot.subsystems.drive.Drive;
 
 public class FollowAprilTagCommand extends Command {
     private final boolean enableDrivetrain = false;
-    private final double maxSpeed = Meters.of(0.5).in(Meters);
-    private final double maxAngularRate = RotationsPerSecond.of(2.0).in(RadiansPerSecond);
-    private final double searchAngularRate = RotationsPerSecond.of(1.0).in(RadiansPerSecond);
+    private double maxSpeed;
+    private double maxAngularRate;
+    private double searchAngularRate;
 
-    private final double rotationDeadband = maxAngularRate * 0.0;
-    private final double translationDeadband = maxSpeed * 0.0;
+    private final double rotationDeadband = maxAngularRate * 0.05;
+    private final double translationDeadband = maxSpeed * 0.05;
 
     private final String limelightName = "limelight";
     
     // Desired offset from the tag (2 meters in front)
     private final Transform3d targetOffset = new Transform3d(new Translation3d(2.0, 0.0, 0.0), new Rotation3d(0, 0, 0));
-    private final PIDController xPositionPID = new PIDController(5.0, 0, 0);
-    private final PIDController yPositionPID = new PIDController(5.0, 0, 0);
-    private final PIDController rotationPID = new PIDController(5.0, 0, 0);
+    private PIDController xPositionPID = new PIDController(1.0, 0, 0);
+    private PIDController yPositionPID = new PIDController(1.0, 0, 0);
+    private PIDController rotationPID = new PIDController(10.0, 0, 0);
 
     // The desired robot rotation relative to the tag (facing the tag)
     private final Rotation2d targetRobotRotationFacingTag = Rotation2d.fromDegrees(180); 
@@ -76,6 +77,27 @@ public class FollowAprilTagCommand extends Command {
         addRequirements(drive);
         this.drive = drive;
         createFilter();
+
+        switch (Constants.currentMode) {
+            case REAL:
+            case REPLAY:
+                xPositionPID = new PIDController(1.0, 0, 0);
+                yPositionPID = new PIDController(1.0, 0, 0);
+                rotationPID = new PIDController(20.0, 0, 1.0);
+                maxSpeed = Meters.of(0.5).in(Meters);
+                maxAngularRate = RotationsPerSecond.of(2.0).in(RadiansPerSecond);
+                searchAngularRate = RotationsPerSecond.of(1.0).in(RadiansPerSecond);
+                break;
+
+            case SIM:
+                xPositionPID = new PIDController(5.0, 0, 0);
+                yPositionPID = new PIDController(5.0, 0, 0);
+                rotationPID = new PIDController(2.0, 0, 0);
+                maxSpeed = Meters.of(0.5).in(Meters);
+                maxAngularRate = RotationsPerSecond.of(2.0).in(RadiansPerSecond);
+                searchAngularRate = RotationsPerSecond.of(0.25).in(RadiansPerSecond);
+                break;
+        }
     }
 
     private void createFilter() {
@@ -189,7 +211,7 @@ public class FollowAprilTagCommand extends Command {
             //I feel like I'm doing something wrong, but this mess puts the tag in robot space with the expected coordinate frame
             //and it follows the PhotoVision frame for tags, which is not left-handed...
             double[] tagPoseRobotSpaceArray = LimelightHelpers.getTargetPose_RobotSpace(limelightName);
-            Pose3d tagPoseRobotSpace = new Pose3d(new Translation3d(tagPoseRobotSpaceArray[2], tagPoseRobotSpaceArray[0], -tagPoseRobotSpaceArray[1]), 
+            Pose3d tagPoseRobotSpace = new Pose3d(new Translation3d(tagPoseRobotSpaceArray[2], -tagPoseRobotSpaceArray[0], -tagPoseRobotSpaceArray[1]), 
                                                   new Rotation3d(Math.toRadians(tagPoseRobotSpaceArray[5]), Math.toRadians(-tagPoseRobotSpaceArray[3]), Math.toRadians(tagPoseRobotSpaceArray[4] + 180)));
             Pose3d tagPoseFieldSpace = robotPoseFieldSpace.plus(pose3dToTransform3d(tagPoseRobotSpace));
             Logger.recordOutput("FollowAprilTag/TagPose_RobotSpace", tagPoseRobotSpace);
@@ -197,6 +219,7 @@ public class FollowAprilTagCommand extends Command {
 
             updateFilter(tagPoseFieldSpace);
             filteredTagPoseFieldSpace = getFilteredPose();
+            filteredTagPoseFieldSpace = tagPoseFieldSpace; //Actually ignore filtering for now
             Logger.recordOutput("FollowAprilTag/FilteredTagPose_FieldSpace", filteredTagPoseFieldSpace);
 
             //Use the filtered tag pose to create a filtered target pose in field space by adding the target offset to the filtered tag pose in field space.
@@ -241,12 +264,12 @@ public class FollowAprilTagCommand extends Command {
             double adjustedTargetY = filteredTargetPoseFieldSpace.getY() - robotPoseFieldSpace.getY();
 
 
-            Pose3d filteredTagRobotSpace = filteredTagPoseFieldSpace.relativeTo(robotPoseFieldSpace);
-
             //This could be changed to just face the camera towards the tag, but
-            //what if there are multiple cameras? 
-            Rotation2d targetRotation = Rotation2d.fromRadians(Math.atan2(filteredTagRobotSpace.getY(), 
-                                                                          filteredTagRobotSpace.getX())).
+            //what if there are multiple cameras?
+
+            Translation3d tagRobotDiffFieldSpace = filteredTagPoseFieldSpace.getTranslation().minus(robotPoseFieldSpace.getTranslation());
+            Rotation2d targetRotation = Rotation2d.fromRadians(Math.atan2(tagRobotDiffFieldSpace.getY(), 
+                                                                          tagRobotDiffFieldSpace.getX())).
                                                                             plus(targetRobotRotationFacingTag);
             
             //Robot relative
@@ -261,12 +284,12 @@ public class FollowAprilTagCommand extends Command {
             yVelocityRequest = yPositionPID.calculate(robotPoseFieldSpace.getY(), filteredTargetPoseFieldSpace.getY());
             yVelocityRequest = MathUtil.clamp(yVelocityRequest, -maxSpeed, maxSpeed);
 
-            rotationRequest = rotationPID.calculate(0, targetRotation.getRadians());
+            rotationRequest = rotationPID.calculate(robotPose2DFieldSpace.getRotation().getRadians(), targetRotation.getRadians());
             rotationRequest = MathUtil.clamp(rotationRequest, -maxAngularRate, maxAngularRate);
             
             Logger.recordOutput("FollowAprilTag/AdjustedTargetX", adjustedTargetX, Meters);
             Logger.recordOutput("FollowAprilTag/AdjustedTargetY", adjustedTargetY, Meters);
-            Logger.recordOutput("FollowAprilTag/TargetRotation", targetRotation.getDegrees());
+            Logger.recordOutput("FollowAprilTag/TargetRotation", targetRotation.getRadians());
 
             countSinceLastSeen++;
         } else {
@@ -280,28 +303,32 @@ public class FollowAprilTagCommand extends Command {
             filterInitialized = false; //Reset the filter so that it will be re-initialized with the next measurement
         }
 
-       // xVelocityRequest = MathUtil.applyDeadband(xVelocityRequest, translationDeadband);
-       // yVelocityRequest = MathUtil.applyDeadband(yVelocityRequest, translationDeadband);
-       // rotationRequest = MathUtil.applyDeadband(rotationRequest, rotationDeadband);
+     //   xVelocityRequest = MathUtil.applyDeadband(xVelocityRequest, translationDeadband);
+     //   yVelocityRequest = MathUtil.applyDeadband(yVelocityRequest, translationDeadband);
+     //   rotationRequest = MathUtil.applyDeadband(rotationRequest, rotationDeadband);
 
-        Logger.recordOutput("FollowAprilTag/XVelocityRequest", xVelocityRequest, MetersPerSecond);
-        Logger.recordOutput("FollowAprilTag/YVelocityRequest", yVelocityRequest, MetersPerSecond);
-        Logger.recordOutput("FollowAprilTag/RotationRequest", rotationRequest, RadiansPerSecond);
+        //xVelocityRequest = 0;
+        //yVelocityRequest = 0;
+        Logger.recordOutput("FollowAprilTag/XVelocityRequestFieldSpace", xVelocityRequest, MetersPerSecond);
+        Logger.recordOutput("FollowAprilTag/YVelocityRequestFieldSpace", yVelocityRequest, MetersPerSecond);
+        Logger.recordOutput("FollowAprilTag/RotationRequestFieldSpace", rotationRequest, RadiansPerSecond);
+
+        ChassisSpeeds speeds =
+            new ChassisSpeeds(
+                xVelocityRequest,
+                yVelocityRequest,
+                rotationRequest);
+        ChassisSpeeds commandedSpeeds = ChassisSpeeds.fromFieldRelativeSpeeds(speeds, drive.getRotation());
+        Logger.recordOutput("FollowAprilTag/XVelocityRequestedRobotSpace", commandedSpeeds.vxMetersPerSecond, MetersPerSecond);
+        Logger.recordOutput("FollowAprilTag/YVelocityRequestedRobotSpace", commandedSpeeds.vyMetersPerSecond, MetersPerSecond);
+        Logger.recordOutput("FollowAprilTag/RotationRequestedRobotSpace", commandedSpeeds.omegaRadiansPerSecond, RadiansPerSecond);
+        Logger.recordOutput("FollowAprilTag/EnableDrivetrain", enableDrivetrain);
 
         //Only command the drivetrain if the boolean is set to enable it
         //This just allows easy disabiling of the drivetrain for safer testing.
         if(enableDrivetrain) {
-            ChassisSpeeds speeds =
-                new ChassisSpeeds(
-                    xVelocityRequest,
-                    yVelocityRequest,
-                    rotationRequest);
-                    
-            ChassisSpeeds commandedSpeeds = ChassisSpeeds.fromFieldRelativeSpeeds(speeds, drive.getRotation());
-            Logger.recordOutput("FollowAprilTag/XVelocityCommanded", commandedSpeeds.vxMetersPerSecond, MetersPerSecond);
-            Logger.recordOutput("FollowAprilTag/YVelocityCommanded", commandedSpeeds.vyMetersPerSecond, MetersPerSecond);
-            Logger.recordOutput("FollowAprilTag/RotationCommanded", commandedSpeeds.omegaRadiansPerSecond, RadiansPerSecond);
             drive.runVelocity(commandedSpeeds);
+
         } else {
             drive.stopWithX();
         }
