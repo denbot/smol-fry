@@ -70,12 +70,16 @@ public class Robot extends LoggedRobot {
       intrinsics.set(2, 2, 1);
       intrinsics.set(0, 2, 661);
       intrinsics.set(1, 2, 396);
- 
+
+      visionSim.missedTagDetectionPercent(0.1).
+                tagDetectionPositionStdDev(0.025).
+                tagDetectionRotationStdDev(Math.toRadians(5));
+
       visionSim.setDoLimelightPublishing(true);
       visionSim.addCamera(
           new Camera(1280,
                     800,
-                    new Pose3d(0.4, 0, 0.5, new Rotation3d(0, 0, 0)),
+                    new Pose3d(-0.19, 0.04, 0.194, new Rotation3d(Math.toRadians(180), 0, Math.toRadians(180))),
                     intrinsics,
                     "limelight"));
 
