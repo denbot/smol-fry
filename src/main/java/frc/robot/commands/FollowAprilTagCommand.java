@@ -13,7 +13,9 @@ import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.Nat;
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.controller.PIDController;
+import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.estimator.KalmanFilter;
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -27,51 +29,48 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.math.numbers.N6;
 import edu.wpi.first.math.system.LinearSystem;
+import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.util.LimelightHelpers;
 import frc.robot.Constants;
 import frc.robot.subsystems.drive.Drive;
 
 public class FollowAprilTagCommand extends Command {
-    private final boolean enableDrivetrain = false;
+    private final boolean enableDrivetrain = true;
     private double maxSpeed;
     private double maxAngularRate;
     private double searchAngularRate;
 
-    private final double rotationDeadband = maxAngularRate * 0.05;
-    private final double translationDeadband = maxSpeed * 0.05;
+    private double rotationDeadband = maxAngularRate * 0.25;
+    private double translationDeadband = maxSpeed * 0.25;
 
     private final String limelightName = "limelight";
     
-    // Desired offset from the tag (2 meters in front)
-    private final Transform3d targetOffset = new Transform3d(new Translation3d(2.0, 0.0, 0.0), new Rotation3d(0, 0, 0));
-    private PIDController xPositionPID = new PIDController(1.0, 0, 0);
-    private PIDController yPositionPID = new PIDController(1.0, 0, 0);
-    private PIDController rotationPID = new PIDController(10.0, 0, 0);
+    // Desired offset from the tag
+    private final Transform3d targetOffset = new Transform3d(new Translation3d(1.5, 0.0, 0.0), new Rotation3d(0, 0, 0));
+    private ProfiledPIDController  xPositionPID;
+    private ProfiledPIDController  yPositionPID;
+    private ProfiledPIDController  rotationPID;
 
     // The desired robot rotation relative to the tag (facing the tag)
-    private final Rotation2d targetRobotRotationFacingTag = Rotation2d.fromDegrees(180); 
+    private final Rotation2d targetRobotRotationFacingTag = Rotation2d.fromDegrees(0); 
 
     // Kalman filter parameters
     private static final double dtSeconds = 0.02; // 20ms loop time
-    private static final double modelStdDevX = 0.5; // process noise
-    private static final double modelStdDevY = 0.5;
-    private static final double modelStdDevZ = 0.5;
-    private static final double modelStdDevTheta = 0.5;
-    private static final double measurementStdDevX = 0.05; // Measurement noise from vision
-    private static final double measurementStdDevY = 0.05;
-    private static final double measurementStdDevZ = 0.05;
-    private static final double measurementStdDevTheta = 0.1;
+    private static final double modelStdDev = 0.3; // process noise
+    private static final double measurementStdDev = 0.15; // Measurement noise from vision
     
-    private KalmanFilter<N6, N6, N6> tagPoseFilter;
+    private KalmanFilter<N3, N3, N3> targetPoseFilter;
     private boolean filterInitialized = false;
 
     private Drive drive;
 
-    private int countSinceLastSeen = 0;
+    private int countSinceLastSeen = 10000; //Start large so we go straight into the searching behavior
+    private final int translationStopCount = 20;
+    private final int rotationStopCount = 20;
 
     private Pose3d filteredTargetPoseFieldSpace = new Pose3d();
-    private Pose3d filteredTagPoseFieldSpace = new Pose3d();
+    private Pose3d tagPoseFieldSpace = new Pose3d();
 
     public FollowAprilTagCommand(Drive drive) {
         addRequirements(drive);
@@ -81,21 +80,35 @@ public class FollowAprilTagCommand extends Command {
         switch (Constants.currentMode) {
             case REAL:
             case REPLAY:
-                xPositionPID = new PIDController(1.0, 0, 0);
-                yPositionPID = new PIDController(1.0, 0, 0);
-                rotationPID = new PIDController(20.0, 0, 1.0);
-                maxSpeed = Meters.of(0.5).in(Meters);
+                maxSpeed = Meters.of(2.0).in(Meters);
                 maxAngularRate = RotationsPerSecond.of(2.0).in(RadiansPerSecond);
-                searchAngularRate = RotationsPerSecond.of(1.0).in(RadiansPerSecond);
+                searchAngularRate = RotationsPerSecond.of(0.5).in(RadiansPerSecond);
+                rotationDeadband = maxAngularRate * 0.05;
+                translationDeadband = maxSpeed * 0.2;
+
+                xPositionPID = new ProfiledPIDController (5.0, 0, 0, 
+                                        new TrapezoidProfile.Constraints(maxSpeed, 4));
+                yPositionPID = new ProfiledPIDController (5.0, 0, 0, 
+                                        new TrapezoidProfile.Constraints(maxSpeed, 4));
+                rotationPID = new ProfiledPIDController (10.0, 0, 1.0, 
+                                        new TrapezoidProfile.Constraints(maxAngularRate, 3));
+
                 break;
 
             case SIM:
-                xPositionPID = new PIDController(5.0, 0, 0);
-                yPositionPID = new PIDController(5.0, 0, 0);
-                rotationPID = new PIDController(2.0, 0, 0);
                 maxSpeed = Meters.of(0.5).in(Meters);
                 maxAngularRate = RotationsPerSecond.of(2.0).in(RadiansPerSecond);
                 searchAngularRate = RotationsPerSecond.of(0.25).in(RadiansPerSecond);
+                rotationDeadband = maxAngularRate * 0.1;
+                translationDeadband = maxSpeed * 0.2;
+
+                xPositionPID = new ProfiledPIDController (1.0, 0, 0, 
+                                        new TrapezoidProfile.Constraints(maxSpeed, 3));
+                yPositionPID = new ProfiledPIDController (1.0, 0, 0, 
+                                        new TrapezoidProfile.Constraints(maxSpeed, 3));
+                rotationPID = new ProfiledPIDController (2.0, 0, 1.0, 
+                                        new TrapezoidProfile.Constraints(maxAngularRate, 3));
+
                 break;
         }
     }
@@ -107,19 +120,19 @@ public class FollowAprilTagCommand extends Command {
         // C = I (identity - we observe the full state)
         // D = 0 (no feedthrough)
         
-        Matrix<N6, N6> A = new Matrix<>(Nat.N6(), Nat.N6());
-        Matrix<N6, N6> B = Matrix.eye(Nat.N6());
-        Matrix<N6, N6> C = Matrix.eye(Nat.N6());
-        Matrix<N6, N6> D = new Matrix<>(Nat.N6(), Nat.N6());
+        Matrix<N3, N3> A = new Matrix<>(Nat.N3(), Nat.N3());
+        Matrix<N3, N3> B = Matrix.eye(Nat.N3());
+        Matrix<N3, N3> C = Matrix.eye(Nat.N3());
+        Matrix<N3, N3> D = new Matrix<>(Nat.N3(), Nat.N3());
         
-        LinearSystem<N6, N6, N6> system = new LinearSystem<>(A, B, C, D);
+        LinearSystem<N3, N3, N3> system = new LinearSystem<>(A, B, C, D);
         
-        tagPoseFilter = new KalmanFilter<>(
-            Nat.N6(),
-            Nat.N6(),
+        targetPoseFilter = new KalmanFilter<>(
+            Nat.N3(),
+            Nat.N3(),
             system,
-            VecBuilder.fill(modelStdDevX, modelStdDevY, modelStdDevZ, modelStdDevTheta, modelStdDevTheta, modelStdDevTheta), // Model state std devs
-            VecBuilder.fill(measurementStdDevX, measurementStdDevY, measurementStdDevZ, measurementStdDevTheta, measurementStdDevTheta, measurementStdDevTheta), // Measurement std devs
+            VecBuilder.fill(modelStdDev, modelStdDev, modelStdDev), // Model state std devs
+            VecBuilder.fill(measurementStdDev, measurementStdDev, measurementStdDev), // Measurement std devs
             dtSeconds
         );        
     }
@@ -128,32 +141,25 @@ public class FollowAprilTagCommand extends Command {
         //Filter the tag pose in field space
         if(!filterInitialized) {
             if(measurement != null) {
-                tagPoseFilter.setXhat(VecBuilder.fill(
+                targetPoseFilter.setXhat(VecBuilder.fill(
                     measurement.getX(),
                     measurement.getY(),
-                    measurement.getZ(),
-                    measurement.getRotation().getX(),
-                    measurement.getRotation().getY(),
-                    measurement.getRotation().getZ()
+                    measurement.getZ()
                     ));
                 filterInitialized = true;
             }
         } else {
             // Predict step (Assuming the tag is stationary, so input is zero)
-            tagPoseFilter.predict(VecBuilder.fill(0, 0, 0,0,0,0), dtSeconds);
+            targetPoseFilter.predict(VecBuilder.fill(0, 0, 0), dtSeconds);
             
             if(measurement != null) {
                 // Correct step with new measurement
-                tagPoseFilter.correct(
-                    VecBuilder.fill(0, 0, 0,0,0,0), // Input
+                targetPoseFilter.correct(
+                    VecBuilder.fill(0, 0, 0), // Input
                     VecBuilder.fill(
                         measurement.getX(),
                         measurement.getY(),
-                        measurement.getZ(),
-                        measurement.getRotation().getX(),
-                        measurement.getRotation().getY(),
-                        measurement.getRotation().getZ()
-
+                        measurement.getZ()
                     )
                 );
             }
@@ -170,13 +176,13 @@ public class FollowAprilTagCommand extends Command {
                           new Rotation3d(0,0, pose.getRotation().getZ()));
     }
 
-    private Pose3d getFilteredPose() {
-        return new Pose3d( new Translation3d(tagPoseFilter.getXhat(0),
-                                            tagPoseFilter.getXhat(1),
-                                            tagPoseFilter.getXhat(2)),
-            new Rotation3d(tagPoseFilter.getXhat(3),
-                            tagPoseFilter.getXhat(4),
-                            tagPoseFilter.getXhat(5))
+    private Pose3d getFilteredPose(double targetPoseYaw) {
+        return new Pose3d( new Translation3d(targetPoseFilter.getXhat(0),
+                                            targetPoseFilter.getXhat(1),
+                                            targetPoseFilter.getXhat(2)),
+            new Rotation3d(0,
+                            0,
+                            targetPoseYaw)
         );
     }
 
@@ -205,6 +211,7 @@ public class FollowAprilTagCommand extends Command {
             //Get the tag pose in the robot coordinate space from limelight and then
             //use the robot pose to get that tag in field space
 
+            //This is all very hacky for a demo.
             //I don't know what the heck limelight is doing with coordinate spaces.
             //From testing it seems that it does not follow the standard FRC convention for robot coordinate space (or what is listed on the limelight website).
             //Also the coordiante frame of april tags seems to be left-handed...
@@ -212,31 +219,26 @@ public class FollowAprilTagCommand extends Command {
             //and it follows the PhotoVision frame for tags, which is not left-handed...
             double[] tagPoseRobotSpaceArray = LimelightHelpers.getTargetPose_RobotSpace(limelightName);
             Pose3d tagPoseRobotSpace = new Pose3d(new Translation3d(tagPoseRobotSpaceArray[2], -tagPoseRobotSpaceArray[0], -tagPoseRobotSpaceArray[1]), 
-                                                  new Rotation3d(Math.toRadians(tagPoseRobotSpaceArray[5]), Math.toRadians(-tagPoseRobotSpaceArray[3]), Math.toRadians(tagPoseRobotSpaceArray[4] + 180)));
-            Pose3d tagPoseFieldSpace = robotPoseFieldSpace.plus(pose3dToTransform3d(tagPoseRobotSpace));
+                                                  new Rotation3d(-Math.toRadians(tagPoseRobotSpaceArray[5]), Math.toRadians(tagPoseRobotSpaceArray[3]), -Math.toRadians(tagPoseRobotSpaceArray[4] + 180)));
+            tagPoseFieldSpace = robotPoseFieldSpace.plus(pose3dToTransform3d(tagPoseRobotSpace));
             Logger.recordOutput("FollowAprilTag/TagPose_RobotSpace", tagPoseRobotSpace);
             Logger.recordOutput("FollowAprilTag/TagPose_FieldSpace", tagPoseFieldSpace);
 
-            updateFilter(tagPoseFieldSpace);
-            filteredTagPoseFieldSpace = getFilteredPose();
-            filteredTagPoseFieldSpace = tagPoseFieldSpace; //Actually ignore filtering for now
-            Logger.recordOutput("FollowAprilTag/FilteredTagPose_FieldSpace", filteredTagPoseFieldSpace);
-
-            //Use the filtered tag pose to create a filtered target pose in field space by adding the target offset to the filtered tag pose in field space.
-            filteredTargetPoseFieldSpace = filteredTagPoseFieldSpace.plus(targetOffset);
+            //Use the tag pose to create a filtered target pose in field space by adding the target offset to the filtered tag pose in field space.
+            Pose3d targetPoseFieldSpace = lockToGround(tagPoseFieldSpace.plus(targetOffset));
+            updateFilter(targetPoseFieldSpace);
+            filteredTargetPoseFieldSpace = getFilteredPose(targetPoseFieldSpace.getRotation().getZ());
 
             //Update target pose to be something actually achievable by the robot
             //This zeros the Z translation, roll, and pitch.
             filteredTargetPoseFieldSpace = lockToGround(filteredTargetPoseFieldSpace);
 
+            Logger.recordOutput("FollowAprilTag/TargetPose_FieldSpace", targetPoseFieldSpace);
             Logger.recordOutput("FollowAprilTag/FilteredTargetPose_FieldSpace", filteredTargetPoseFieldSpace);
 
-
-            //Currently these are just used for reference
+            //Currently this is just used for reference
             Pose3d targetPoseRobotSpace = tagPoseRobotSpace.plus(targetOffset);
-            Pose3d targetPoseFieldSpace = lockToGround(tagPoseFieldSpace.plus(targetOffset));
             Logger.recordOutput("FollowAprilTag/TargetPose_RobotSpace", targetPoseRobotSpace);
-            Logger.recordOutput("FollowAprilTag/TargetPose_FieldSpace", targetPoseFieldSpace);
 
             countSinceLastSeen = 0;
         } else {
@@ -244,33 +246,19 @@ public class FollowAprilTagCommand extends Command {
 
             // Run predict step even without measurement to maintain filter state
             updateFilter(null); // No measurement update, just predict
-
-            filteredTagPoseFieldSpace = getFilteredPose();
-            filteredTargetPoseFieldSpace = lockToGround(filteredTagPoseFieldSpace.plus(targetOffset));
-
-            Logger.recordOutput("FollowAprilTag/FilteredTargetPose_FieldSpace", filteredTargetPoseFieldSpace);
-            Logger.recordOutput("FollowAprilTag/FilteredTagPose_FieldSpace", filteredTagPoseFieldSpace);
         }
 
         double xVelocityRequest = 0;
         double yVelocityRequest = 0;
         double rotationRequest = 0;
 
-        if (countSinceLastSeen < 3 && filterInitialized) { //If we recently saw the tag, keep trying to go to the last known position
+        //Set the XY Velocity if we have seen the tag within the count limit
+        if (countSinceLastSeen < translationStopCount) {
             //Get the XY and rotation error between where the robot is and where we want it to be.
 
             //Field relative
             double adjustedTargetX = filteredTargetPoseFieldSpace.getX() - robotPoseFieldSpace.getX();
             double adjustedTargetY = filteredTargetPoseFieldSpace.getY() - robotPoseFieldSpace.getY();
-
-
-            //This could be changed to just face the camera towards the tag, but
-            //what if there are multiple cameras?
-
-            Translation3d tagRobotDiffFieldSpace = filteredTagPoseFieldSpace.getTranslation().minus(robotPoseFieldSpace.getTranslation());
-            Rotation2d targetRotation = Rotation2d.fromRadians(Math.atan2(tagRobotDiffFieldSpace.getY(), 
-                                                                          tagRobotDiffFieldSpace.getX())).
-                                                                            plus(targetRobotRotationFacingTag);
             
             //Robot relative
             //double adjustedTargetX = targetPoseRobotSpace.getX();
@@ -283,29 +271,42 @@ public class FollowAprilTagCommand extends Command {
 
             yVelocityRequest = yPositionPID.calculate(robotPoseFieldSpace.getY(), filteredTargetPoseFieldSpace.getY());
             yVelocityRequest = MathUtil.clamp(yVelocityRequest, -maxSpeed, maxSpeed);
+            
+            Logger.recordOutput("FollowAprilTag/AdjustedTargetX", adjustedTargetX, Meters);
+            Logger.recordOutput("FollowAprilTag/AdjustedTargetY", adjustedTargetY, Meters);
+        } else {
+            //Else just stop the XY translation
+            xVelocityRequest = 0;
+            yVelocityRequest = 0;
+            xPositionPID.reset(robotPoseFieldSpace.getX());
+            yPositionPID.reset(robotPoseFieldSpace.getY());
+            filterInitialized = false; //Reset the filter so that it will be re-initialized with the next measurement
+        }
+
+        //Set the rotation velocity if we have seen the tag within the count limit
+        if (countSinceLastSeen < rotationStopCount) {
+            //This could be changed to just face the camera towards the tag, but
+            //what if there are multiple cameras?
+            Translation3d tagRobotDiffFieldSpace = tagPoseFieldSpace.getTranslation().minus(robotPoseFieldSpace.getTranslation());
+            Rotation2d targetRotation = Rotation2d.fromRadians(Math.atan2(tagRobotDiffFieldSpace.getY(), 
+                                                                          tagRobotDiffFieldSpace.getX())).
+                                                                            plus(targetRobotRotationFacingTag);
 
             rotationRequest = rotationPID.calculate(robotPose2DFieldSpace.getRotation().getRadians(), targetRotation.getRadians());
             rotationRequest = MathUtil.clamp(rotationRequest, -maxAngularRate, maxAngularRate);
             
-            Logger.recordOutput("FollowAprilTag/AdjustedTargetX", adjustedTargetX, Meters);
-            Logger.recordOutput("FollowAprilTag/AdjustedTargetY", adjustedTargetY, Meters);
             Logger.recordOutput("FollowAprilTag/TargetRotation", targetRotation.getRadians());
-
-            countSinceLastSeen++;
         } else {
-
-            xVelocityRequest = 0;
-            yVelocityRequest = 0;
             rotationRequest = searchAngularRate;
-            xPositionPID.reset();
-            yPositionPID.reset();
-            rotationPID.reset();
+            rotationPID.reset(robotPose2DFieldSpace.getRotation().getRadians());
             filterInitialized = false; //Reset the filter so that it will be re-initialized with the next measurement
         }
+        Logger.recordOutput("FollowAprilTag/TranslationDeadband", translationDeadband);
+        Logger.recordOutput("FollowAprilTag/RotationDeadband", rotationDeadband);
 
-     //   xVelocityRequest = MathUtil.applyDeadband(xVelocityRequest, translationDeadband);
-     //   yVelocityRequest = MathUtil.applyDeadband(yVelocityRequest, translationDeadband);
-     //   rotationRequest = MathUtil.applyDeadband(rotationRequest, rotationDeadband);
+        xVelocityRequest = MathUtil.applyDeadband(xVelocityRequest, translationDeadband);
+        yVelocityRequest = MathUtil.applyDeadband(yVelocityRequest, translationDeadband);
+        rotationRequest = MathUtil.applyDeadband(rotationRequest, rotationDeadband);
 
         //xVelocityRequest = 0;
         //yVelocityRequest = 0;
