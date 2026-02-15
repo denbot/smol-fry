@@ -79,7 +79,7 @@ public class Robot extends LoggedRobot {
       visionSim.addCamera(
           new Camera(1280,
                     800,
-                    new Pose3d(-0.19, 0.04, 0.194, new Rotation3d(Math.toRadians(180), 0, Math.toRadians(180))),
+                    new Pose3d(0.19, -0.04, 0.194, new Rotation3d(Math.toRadians(180), 0, Math.toRadians(180))),
                     intrinsics,
                     "limelight"));
 
