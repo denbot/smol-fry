@@ -2,11 +2,15 @@ package frc.robot.commands;
 
 import static edu.wpi.first.units.Units.Meters;
 import static edu.wpi.first.units.Units.MetersPerSecond;
+import static edu.wpi.first.units.Units.MetersPerSecondPerSecond;
 import static edu.wpi.first.units.Units.Radians;
 import static edu.wpi.first.units.Units.RadiansPerSecond;
 import static edu.wpi.first.units.Units.RotationsPerSecond;
 
 import org.littletonrobotics.junction.Logger;
+
+import com.ctre.phoenix6.StatusSignal;
+import com.ctre.phoenix6.hardware.Pigeon2;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.Matrix;
@@ -30,9 +34,11 @@ import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.math.numbers.N6;
 import edu.wpi.first.math.system.LinearSystem;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
+import edu.wpi.first.units.measure.LinearAcceleration;
 import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.util.LimelightHelpers;
 import frc.robot.Constants;
+import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.drive.Drive;
 
 public class FollowAprilTagCommand extends Command {
@@ -46,6 +52,13 @@ public class FollowAprilTagCommand extends Command {
 
     private final String limelightName = "limelight";
     
+    //This should really be moved elsewhere
+    private final Pigeon2 pigeon =
+      new Pigeon2(TunerConstants.DrivetrainConstants.Pigeon2Id, TunerConstants.kCANBus);
+    private final StatusSignal<LinearAcceleration> accelerationX = pigeon.getAccelerationX();
+    private final StatusSignal<LinearAcceleration> accelerationY = pigeon.getAccelerationY();
+    private final StatusSignal<LinearAcceleration> accelerationZ = pigeon.getAccelerationZ();
+
     // Desired offset from the tag
     private final Transform3d targetOffset = new Transform3d(new Translation3d(1.5, 0.0, 0.0), new Rotation3d(0, 0, 0));
     private ProfiledPIDController  xPositionPID;
@@ -77,6 +90,10 @@ public class FollowAprilTagCommand extends Command {
         this.drive = drive;
         createFilter();
 
+        accelerationX.setUpdateFrequency(50);
+        accelerationY.setUpdateFrequency(50);
+        accelerationZ.setUpdateFrequency(50);
+
         switch (Constants.currentMode) {
             case REAL:
             case REPLAY:
@@ -86,11 +103,11 @@ public class FollowAprilTagCommand extends Command {
                 rotationDeadband = maxAngularRate * 0.05;
                 translationDeadband = maxSpeed * 0.2;
 
-                xPositionPID = new ProfiledPIDController (5.0, 0, 0, 
+                xPositionPID = new ProfiledPIDController (5.0, 0, 0.0, 
                                         new TrapezoidProfile.Constraints(maxSpeed, 4));
-                yPositionPID = new ProfiledPIDController (5.0, 0, 0, 
+                yPositionPID = new ProfiledPIDController (5.0, 0, 0.0, 
                                         new TrapezoidProfile.Constraints(maxSpeed, 4));
-                rotationPID = new ProfiledPIDController (10.0, 0, 1.0, 
+                rotationPID = new ProfiledPIDController (10.0, 0, 0.0, 
                                         new TrapezoidProfile.Constraints(maxAngularRate, 3));
 
                 break;
@@ -153,6 +170,10 @@ public class FollowAprilTagCommand extends Command {
             targetPoseFilter.predict(VecBuilder.fill(0, 0, 0), dtSeconds);
             
             if(measurement != null) {
+
+                double acceleration = Math.sqrt(Math.pow(accelerationX.getValue().in(MetersPerSecondPerSecond), 2) +
+                                            Math.pow(accelerationY.getValue().in(MetersPerSecondPerSecond), 2) +
+                                            Math.pow(accelerationZ.getValue().in(MetersPerSecondPerSecond), 2));
                 // Correct step with new measurement
                 targetPoseFilter.correct(
                     VecBuilder.fill(0, 0, 0), // Input
@@ -160,7 +181,8 @@ public class FollowAprilTagCommand extends Command {
                         measurement.getX(),
                         measurement.getY(),
                         measurement.getZ()
-                    )
+                    ),
+                    Matrix.eye(Nat.N3()).times(Math.pow(acceleration * 0.01, 2)) // Dynamically adjust measurement noise based on acceleration (more noise when accelerating)
                 );
             }
 
