@@ -202,7 +202,11 @@ public class FollowAprilTagCommand extends Command {
         Pose3d robotPoseFieldSpace = new Pose3d(new Translation3d(robotPose2DFieldSpace.getX(), robotPose2DFieldSpace.getY(), 0),
                                                 new Rotation3d(0, 0, robotPose2DFieldSpace.getRotation().getRadians()));
         
-        
+        if(LimelightHelpers.getHeartbeat(limelightName) == 0.0) {
+            drive.stopWithX();
+            return;
+        }
+
         boolean hasTarget = LimelightHelpers.getTV(limelightName);
         Logger.recordOutput("FollowAprilTag/RobotPose_FieldSpace", robotPoseFieldSpace);
         Logger.recordOutput("FollowAprilTag/HasTarget", hasTarget);
