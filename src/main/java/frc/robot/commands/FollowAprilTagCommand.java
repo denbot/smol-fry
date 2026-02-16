@@ -257,27 +257,13 @@ public class FollowAprilTagCommand extends Command {
         double rotationRequest = 0;
 
         //Set the XY Velocity if we have seen the tag within the count limit
-        if (countSinceLastSeen < translationStopCount) {
-            //Get the XY and rotation error between where the robot is and where we want it to be.
-
-            //Field relative
-            double adjustedTargetX = filteredTargetPoseFieldSpace.getX() - robotPoseFieldSpace.getX();
-            double adjustedTargetY = filteredTargetPoseFieldSpace.getY() - robotPoseFieldSpace.getY();
-            
-            //Robot relative
-            //double adjustedTargetX = targetPoseRobotSpace.getX();
-            //double adjustedTargetY = targetPoseRobotSpace.getY();
-            //double targetRotation = Math.atan2(tagPoseRobotSpace.getY(), tagPoseRobotSpace.getX());
-
-            //Calculate the velocity requests based on that error.
+        if (countSinceLastSeen < translationStopCount) { 
+            //Calculate the velocity requests based on the difference between the current robot pose and the target pose
             xVelocityRequest = xPositionPID.calculate(robotPoseFieldSpace.getX(), filteredTargetPoseFieldSpace.getX());
             xVelocityRequest = MathUtil.clamp(xVelocityRequest, -maxSpeed, maxSpeed);
 
             yVelocityRequest = yPositionPID.calculate(robotPoseFieldSpace.getY(), filteredTargetPoseFieldSpace.getY());
-            yVelocityRequest = MathUtil.clamp(yVelocityRequest, -maxSpeed, maxSpeed);
-            
-            Logger.recordOutput("FollowAprilTag/AdjustedTargetX", adjustedTargetX, Meters);
-            Logger.recordOutput("FollowAprilTag/AdjustedTargetY", adjustedTargetY, Meters);
+            yVelocityRequest = MathUtil.clamp(yVelocityRequest, -maxSpeed, maxSpeed);            
         } else {
             //Else just stop the XY translation
             xVelocityRequest = 0;
@@ -289,8 +275,7 @@ public class FollowAprilTagCommand extends Command {
 
         //Set the rotation velocity if we have seen the tag within the count limit
         if (countSinceLastSeen < rotationStopCount) {
-            //This could be changed to just face the camera towards the tag, but
-            //what if there are multiple cameras?
+            //Get the target rotation in the field space
             Translation3d tagRobotDiffFieldSpace = tagPoseFieldSpace.getTranslation().minus(robotPoseFieldSpace.getTranslation());
             Rotation2d targetRotation = Rotation2d.fromRadians(Math.atan2(tagRobotDiffFieldSpace.getY(), 
                                                                           tagRobotDiffFieldSpace.getX())).
