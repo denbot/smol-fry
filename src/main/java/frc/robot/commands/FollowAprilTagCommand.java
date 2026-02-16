@@ -16,22 +16,16 @@ import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.Nat;
 import edu.wpi.first.math.VecBuilder;
-import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.estimator.KalmanFilter;
-import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Rotation3d;
-import edu.wpi.first.math.geometry.Transform2d;
 import edu.wpi.first.math.geometry.Transform3d;
-import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
-import edu.wpi.first.math.numbers.N6;
 import edu.wpi.first.math.system.LinearSystem;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import edu.wpi.first.units.measure.LinearAcceleration;
@@ -94,6 +88,8 @@ public class FollowAprilTagCommand extends Command {
         accelerationY.setUpdateFrequency(50);
         accelerationZ.setUpdateFrequency(50);
 
+        //Different tuning is used because the drive system is poorly tuned so the simulation 
+        //does not match the real system well.
         switch (Constants.currentMode) {
             case REAL:
             case REPLAY:
@@ -125,7 +121,6 @@ public class FollowAprilTagCommand extends Command {
                                         new TrapezoidProfile.Constraints(maxSpeed, 3));
                 rotationPID = new ProfiledPIDController (2.0, 0, 1.0, 
                                         new TrapezoidProfile.Constraints(maxAngularRate, 3));
-
                 break;
         }
     }
