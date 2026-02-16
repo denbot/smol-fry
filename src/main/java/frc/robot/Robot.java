@@ -25,6 +25,7 @@ import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import frc.robot.util.FakeDriverStation;
 
 public class Robot extends LoggedRobot {
   private Command m_autonomousCommand;
@@ -32,7 +33,11 @@ public class Robot extends LoggedRobot {
   private final RobotContainer m_robotContainer;
   private Field2d robotPosition = new Field2d();
 
+  private final boolean demoMode = true;
+  private final FakeDriverStation fakeDriverStation =
+      new FakeDriverStation(FakeDriverStation.FakeDriverStationMode.AUTONOMOUS);
   VisionSim visionSim = new VisionSim();
+
 
   public Robot() {
         // Set up data receivers & replay source
@@ -86,6 +91,9 @@ public class Robot extends LoggedRobot {
       visionSim.addAprilTag(new AprilTag(0, new Pose3d(2, 0, 0.5, new Rotation3d(0, 0, 0))));
     }
 
+    if (demoMode) {
+      fakeDriverStation.start();
+    }
   }
 
   @Override
