@@ -3,7 +3,6 @@ package frc.robot.commands;
 import static edu.wpi.first.units.Units.Meters;
 import static edu.wpi.first.units.Units.MetersPerSecond;
 import static edu.wpi.first.units.Units.MetersPerSecondPerSecond;
-import static edu.wpi.first.units.Units.Radians;
 import static edu.wpi.first.units.Units.RadiansPerSecond;
 import static edu.wpi.first.units.Units.RotationsPerSecond;
 
@@ -25,15 +24,15 @@ import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.math.numbers.N2;
 import edu.wpi.first.math.system.LinearSystem;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import edu.wpi.first.units.measure.LinearAcceleration;
 import edu.wpi.first.wpilibj2.command.Command;
-import frc.robot.util.LimelightHelpers;
 import frc.robot.Constants;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.drive.Drive;
+import frc.robot.util.LimelightHelpers;
 
 public class FollowAprilTagCommand extends Command {
     private final boolean enableDrivetrain = true;
@@ -53,8 +52,9 @@ public class FollowAprilTagCommand extends Command {
     private final StatusSignal<LinearAcceleration> accelerationY = pigeon.getAccelerationY();
     private final StatusSignal<LinearAcceleration> accelerationZ = pigeon.getAccelerationZ();
 
-    // Desired offset from the tag
-    private final Transform3d targetOffset = new Transform3d(new Translation3d(1.5, 0.0, 0.0), new Rotation3d(0, 0, 0));
+    // Desired offset from the tag. The reference frame for this is X+ right, Y+ down, Z- Out of tag, when looking at the tag.
+    //Limelight defines a left-handed frame for tags with Z+ out, but we use right-hand frames so this becomes Z-.
+    private final Transform3d targetOffset = new Transform3d(new Translation3d(0, 0.0, -1.5), new Rotation3d(0, 0, 0));
     private ProfiledPIDController  xPositionPID;
     private ProfiledPIDController  yPositionPID;
     private ProfiledPIDController  rotationPID;
@@ -67,7 +67,7 @@ public class FollowAprilTagCommand extends Command {
     private static final double modelStdDev = 0.3; // process noise
     private static final double measurementStdDev = 0.15; // Measurement noise from vision
     
-    private KalmanFilter<N3, N3, N3> targetPoseFilter;
+    private KalmanFilter<N2, N2, N2> targetPoseFilter;
     private boolean filterInitialized = false;
 
     private Drive drive;
@@ -126,25 +126,25 @@ public class FollowAprilTagCommand extends Command {
     }
 
     private void createFilter() {
-        // State: [x, y, theta], Input: [delta_x, delta_y, delta_theta] (none actually used), Output: [x, y, theta]
+        // State: [x, y], Input: [delta_x, delta_y] (none actually used), Output: [x, y]
         // A = 0 (The state does not change based on the previous state since we are not tracking velocity)
         // B = I (identity - for prediction step)
         // C = I (identity - we observe the full state)
         // D = 0 (no feedthrough)
         
-        Matrix<N3, N3> A = new Matrix<>(Nat.N3(), Nat.N3());
-        Matrix<N3, N3> B = Matrix.eye(Nat.N3());
-        Matrix<N3, N3> C = Matrix.eye(Nat.N3());
-        Matrix<N3, N3> D = new Matrix<>(Nat.N3(), Nat.N3());
+        Matrix<N2, N2> A = new Matrix<>(Nat.N2(), Nat.N2());
+        Matrix<N2, N2> B = Matrix.eye(Nat.N2());
+        Matrix<N2, N2> C = Matrix.eye(Nat.N2());
+        Matrix<N2, N2> D = new Matrix<>(Nat.N2(), Nat.N2());
         
-        LinearSystem<N3, N3, N3> system = new LinearSystem<>(A, B, C, D);
+        LinearSystem<N2, N2, N2> system = new LinearSystem<>(A, B, C, D);
         
         targetPoseFilter = new KalmanFilter<>(
-            Nat.N3(),
-            Nat.N3(),
+            Nat.N2(),
+            Nat.N2(),
             system,
-            VecBuilder.fill(modelStdDev, modelStdDev, modelStdDev), // Model state std devs
-            VecBuilder.fill(measurementStdDev, measurementStdDev, measurementStdDev), // Measurement std devs
+            VecBuilder.fill(modelStdDev, modelStdDev), // Model state std devs
+            VecBuilder.fill(measurementStdDev, measurementStdDev), // Measurement std devs
             dtSeconds
         );        
     }
@@ -155,14 +155,13 @@ public class FollowAprilTagCommand extends Command {
             if(measurement != null) {
                 targetPoseFilter.setXhat(VecBuilder.fill(
                     measurement.getX(),
-                    measurement.getY(),
-                    measurement.getZ()
+                    measurement.getY()
                     ));
                 filterInitialized = true;
             }
         } else {
             // Predict step (Assuming the tag is stationary, so input is zero)
-            targetPoseFilter.predict(VecBuilder.fill(0, 0, 0), dtSeconds);
+            targetPoseFilter.predict(VecBuilder.fill(0, 0), dtSeconds);
             
             if(measurement != null) {
 
@@ -171,13 +170,12 @@ public class FollowAprilTagCommand extends Command {
                                             Math.pow(accelerationZ.getValue().in(MetersPerSecondPerSecond), 2));
                 // Correct step with new measurement
                 targetPoseFilter.correct(
-                    VecBuilder.fill(0, 0, 0), // Input
+                    VecBuilder.fill(0, 0), // Input
                     VecBuilder.fill(
                         measurement.getX(),
-                        measurement.getY(),
-                        measurement.getZ()
+                        measurement.getY()
                     ),
-                    Matrix.eye(Nat.N3()).times(Math.pow(acceleration * 0.01, 2)) // Dynamically adjust measurement noise based on acceleration (more noise when accelerating)
+                    Matrix.eye(Nat.N2()).times(Math.pow(acceleration * 0.01, 2)) // Dynamically adjust measurement noise based on acceleration (more noise when accelerating)
                 );
             }
 
@@ -194,13 +192,12 @@ public class FollowAprilTagCommand extends Command {
     }
 
     private Pose3d getFilteredPose(double targetPoseYaw) {
-        return new Pose3d( new Translation3d(targetPoseFilter.getXhat(0),
-                                            targetPoseFilter.getXhat(1),
-                                            targetPoseFilter.getXhat(2)),
-            new Rotation3d(0,
-                            0,
-                            targetPoseYaw)
-        );
+        return new Pose3d(new Translation3d(targetPoseFilter.getXhat(0),
+                                            targetPoseFilter.getXhat(1), 
+                                            0),
+                          new Rotation3d(0,
+                                         0,
+                                         targetPoseYaw));
     }
 
     // Called when the command is initially scheduled.
@@ -229,35 +226,35 @@ public class FollowAprilTagCommand extends Command {
         Logger.recordOutput("FollowAprilTag/HasTarget", hasTarget);
         if(hasTarget)
         {        
-            //Get the tag pose in the robot coordinate space from limelight and then
-            //use the robot pose to get that tag in field space
+            //Get the tag pose in the robot coordinate space from limelight.
+            Pose3d tagPoseRobotSpace = LimelightHelpers.toPose3D(LimelightHelpers.getTargetPose_RobotSpace(limelightName));
 
-            //This is all very hacky for a demo.
-            //I don't know what the heck limelight is doing with coordinate spaces.
-            //From testing it seems that it does not follow the standard FRC convention for robot coordinate space (or what is listed on the limelight website).
-            //Also the coordiante frame of april tags seems to be left-handed...
-            //I feel like I'm doing something wrong, but this mess puts the tag in robot space with the expected coordinate frame
-            //and it follows the PhotoVision frame for tags, which is not left-handed...
-            double[] tagPoseRobotSpaceArray = LimelightHelpers.getTargetPose_RobotSpace(limelightName);
-            Pose3d tagPoseRobotSpace = new Pose3d(new Translation3d(tagPoseRobotSpaceArray[2], -tagPoseRobotSpaceArray[0], -tagPoseRobotSpaceArray[1]), 
-                                                  new Rotation3d(-Math.toRadians(tagPoseRobotSpaceArray[5]), Math.toRadians(tagPoseRobotSpaceArray[3]), -Math.toRadians(tagPoseRobotSpaceArray[4] + 180)));
+            //This rotates the tag in robot space to follow the standard FRC convention of: X+ forward, Y+ left, Z+ up
+            //instead of whatever limelight uses.
+            //
+            //The result is that the tag frame is X+ right, Y+ down, Z- Out of tag, when looking at the tag.
+            //Limelight defines a left-handed frame for the tag frame with Z+ out, but since we use right-hand frames
+            //this becomes Z-.
+            //
+            //This was only tested with a single camera position/orientation, it is possible this will break if the camera is moved.
+            tagPoseRobotSpace = tagPoseRobotSpace.rotateBy(new Rotation3d(-Math.PI/2,0,-Math.PI/2));
+
+            //Then we get the tag in the field space using the robot pose in field space
             tagPoseFieldSpace = robotPoseFieldSpace.plus(pose3dToTransform3d(tagPoseRobotSpace));
+
+            //Use the tag pose to create a target pose in field space by adding an offset to it.
+            Pose3d targetPoseFieldSpace = lockToGround(tagPoseFieldSpace.plus(targetOffset));
+
+            //Filter this target pose to reduce jitter
+            updateFilter(targetPoseFieldSpace); 
+            filteredTargetPoseFieldSpace = getFilteredPose(targetPoseFieldSpace.getRotation().getZ());
+            
             Logger.recordOutput("FollowAprilTag/TagPose_RobotSpace", tagPoseRobotSpace);
             Logger.recordOutput("FollowAprilTag/TagPose_FieldSpace", tagPoseFieldSpace);
-
-            //Use the tag pose to create a filtered target pose in field space by adding the target offset to the filtered tag pose in field space.
-            Pose3d targetPoseFieldSpace = lockToGround(tagPoseFieldSpace.plus(targetOffset));
-            updateFilter(targetPoseFieldSpace);
-            filteredTargetPoseFieldSpace = getFilteredPose(targetPoseFieldSpace.getRotation().getZ());
-
-            //Update target pose to be something actually achievable by the robot
-            //This zeros the Z translation, roll, and pitch.
-            filteredTargetPoseFieldSpace = lockToGround(filteredTargetPoseFieldSpace);
-
             Logger.recordOutput("FollowAprilTag/TargetPose_FieldSpace", targetPoseFieldSpace);
             Logger.recordOutput("FollowAprilTag/FilteredTargetPose_FieldSpace", filteredTargetPoseFieldSpace);
 
-            //Currently this is just used for reference
+            //This is just used for reference
             Pose3d targetPoseRobotSpace = tagPoseRobotSpace.plus(targetOffset);
             Logger.recordOutput("FollowAprilTag/TargetPose_RobotSpace", targetPoseRobotSpace);
 
@@ -314,8 +311,6 @@ public class FollowAprilTagCommand extends Command {
         yVelocityRequest = MathUtil.applyDeadband(yVelocityRequest, translationDeadband);
         rotationRequest = MathUtil.applyDeadband(rotationRequest, rotationDeadband);
 
-        //xVelocityRequest = 0;
-        //yVelocityRequest = 0;
         Logger.recordOutput("FollowAprilTag/XVelocityRequestFieldSpace", xVelocityRequest, MetersPerSecond);
         Logger.recordOutput("FollowAprilTag/YVelocityRequestFieldSpace", yVelocityRequest, MetersPerSecond);
         Logger.recordOutput("FollowAprilTag/RotationRequestFieldSpace", rotationRequest, RadiansPerSecond);
@@ -331,15 +326,11 @@ public class FollowAprilTagCommand extends Command {
         Logger.recordOutput("FollowAprilTag/RotationRequestedRobotSpace", commandedSpeeds.omegaRadiansPerSecond, RadiansPerSecond);
         Logger.recordOutput("FollowAprilTag/EnableDrivetrain", enableDrivetrain);
 
-        //Only command the drivetrain if the boolean is set to enable it
-        //This just allows easy disabiling of the drivetrain for safer testing.
         if(enableDrivetrain) {
             drive.runVelocity(commandedSpeeds);
-
         } else {
             drive.stopWithX();
         }
-
 
         Logger.recordOutput("FollowAprilTag/CountSinceLastSeen", countSinceLastSeen);
     }
